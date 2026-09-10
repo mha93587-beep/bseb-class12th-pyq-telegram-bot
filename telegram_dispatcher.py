@@ -3,6 +3,8 @@ import io
 import os
 import time
 import re
+import threading
+from datetime import datetime
 from typing import Optional, Dict, Any, Callable
 import database
 import crawler
@@ -207,3 +209,116 @@ def dispatch_batch(bot_token: str, chat_id: str, year: Optional[str] = None, ord
             database.add_log('INFO', f'Year {curr_year} completed successfully.')
             
     return stats
+
+class BackgroundDispatcherManager:
+    """
+    Singleton Background Dispatcher that runs in a detached daemon thread.
+    Continues running even if browser is closed or WebSocket disconnects!
+    """
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(BackgroundDispatcherManager, cls).__new__(cls)
+                cls._instance._init_state()
+            return cls._instance
+
+    def _init_state(self):
+        self.thread: Optional[threading.Thread] = None
+        self.stop_event = threading.Event()
+        self.is_running = False
+        self.current_filename = ""
+        self.current_year = ""
+        self.sent_count = 0
+        self.failed_count = 0
+        self.start_time: Optional[datetime] = None
+        self.finish_time: Optional[datetime] = None
+        self.status_message = "Idle"
+
+    def start(self, bot_token: str, chat_id: str, year: Optional[str] = None, order: str = 'ASC', delay: float = 2.5):
+        with self._lock:
+            if self.is_running and self.thread and self.thread.is_alive():
+                return False, "Dispatcher is already running in background!"
+
+            self.stop_event.clear()
+            self.is_running = True
+            self.sent_count = 0
+            self.failed_count = 0
+            self.start_time = datetime.utcnow()
+            self.finish_time = None
+            self.status_message = "Starting background dispatch..."
+
+            self.thread = threading.Thread(
+                target=self._worker_loop,
+                args=(bot_token, chat_id, year, order, delay),
+                daemon=True,
+                name="BSEB-Background-Dispatcher"
+            )
+            self.thread.start()
+            database.add_log('INFO', 'Background daemon thread launched successfully.')
+            return True, "Background dispatcher started!"
+
+    def stop(self):
+        with self._lock:
+            if self.is_running:
+                self.stop_event.set()
+                self.status_message = "Stopping dispatcher..."
+                database.add_log('INFO', 'Stop signal sent to background dispatcher.')
+                return True, "Stop signal sent."
+            return False, "Dispatcher is not running."
+
+    def get_info(self) -> Dict[str, Any]:
+        with self._lock:
+            alive = bool(self.thread and self.thread.is_alive())
+            if not alive:
+                self.is_running = False
+            return {
+                "is_running": self.is_running and alive,
+                "current_filename": self.current_filename,
+                "current_year": self.current_year,
+                "sent_count": self.sent_count,
+                "failed_count": self.failed_count,
+                "status_message": self.status_message,
+                "start_time": self.start_time,
+                "finish_time": self.finish_time
+            }
+
+    def _worker_loop(self, bot_token: str, chat_id: str, year: Optional[str], order: str, delay: float):
+        try:
+            self.status_message = "Running background dispatch..."
+            
+            def is_cancelled():
+                return self.stop_event.is_set()
+
+            def cb(paper, curr, total):
+                self.current_filename = paper['clean_filename']
+                self.current_year = paper['year']
+                self.status_message = f"Dispatching Year {paper['year']}: {paper['clean_filename']}"
+
+            result = dispatch_batch(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                year=year,
+                order=order,
+                delay=delay,
+                progress_callback=cb,
+                is_cancelled=is_cancelled
+            )
+
+            self.sent_count = result.get('sent', 0)
+            self.failed_count = result.get('failed', 0)
+            self.finish_time = datetime.utcnow()
+            
+            if self.stop_event.is_set():
+                self.status_message = f"Paused by user. Sent: {self.sent_count}, Failed: {self.failed_count}"
+            else:
+                self.status_message = f"Finished successfully! Sent: {self.sent_count}, Failed: {self.failed_count}"
+
+        except Exception as e:
+            self.status_message = f"Error in background dispatcher: {e}"
+            database.add_log('ERROR', f"Background dispatcher exception: {e}")
+        finally:
+            self.is_running = False
+            self.current_filename = ""

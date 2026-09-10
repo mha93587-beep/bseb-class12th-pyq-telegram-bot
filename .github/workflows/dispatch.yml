@@ -1,0 +1,48 @@
+name: Dispatch BSEB Class 12th PYQs to Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Specific Exam Year (e.g. 2026, 2025 or leave empty for ALL)'
+        required: false
+        default: ''
+      order:
+        description: 'Dispatch Order'
+        required: true
+        default: 'ASC'
+        type: choice
+        options:
+          - ASC
+          - DESC
+      delay:
+        description: 'Delay between uploads in seconds'
+        required: true
+        default: '2.5'
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Background Dispatcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '-1003918378426' }}
+        run: |
+          YEAR_ARG=""
+          if [ -n "${{ github.event.inputs.year }}" ]; then
+            YEAR_ARG="--year ${{ github.event.inputs.year }}"
+          fi
+          python3 main.py dispatch $YEAR_ARG --order ${{ github.event.inputs.order }} --delay ${{ github.event.inputs.delay }}

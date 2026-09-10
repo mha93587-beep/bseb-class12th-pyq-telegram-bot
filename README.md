@@ -1,6 +1,6 @@
 # 📚 Bihar Board (BSEB) Class 12th PYQ Telegram Automated Dispatcher
 
-An end-to-end automated pipeline and Streamlit dashboard that crawls official Bihar School Examination Board (BSEB) Class 12th Previous Year Question Papers (2015–2026) from [Selfstudys.com](https://www.selfstudys.com/) and streams them directly into a Telegram Channel without local disk storage.
+An end-to-end automated pipeline, Streamlit dashboard, and GitHub Actions worker that crawls official Bihar School Examination Board (BSEB) Class 12th Previous Year Question Papers (2015–2026) from [Selfstudys.com](https://www.selfstudys.com/) and streams them directly into a Telegram Channel without local disk storage.
 
 ---
 
@@ -11,61 +11,72 @@ An end-to-end automated pipeline and Streamlit dashboard that crawls official Bi
    - Immediately pipes into Telegram Bot API (`sendDocument`).
    - No disk clutter, no temporary file management, and no storage limits.
 
-2. **📄 Clean PDF Presentation (No Captions & Standardized Filenames)**:
+2. **🚀 True Persistent Background Execution**:
+   - **Streamlit Community Cloud:** Powered by `BackgroundDispatcherManager` running on a detached daemon server thread. Closing your browser tab or locking your phone will **NOT** stop the upload!
+   - **GitHub Actions (1-Click):** Dedicated cloud server runner that dispatches all papers in the background with zero browser dependency.
+
+3. **📄 Clean PDF Presentation (No Captions & Standardized Filenames)**:
    - Files are uploaded as clean PDF documents without captions for distraction-free offline studying.
    - Every file is automatically named with **Subject Name**, **Subject Code**, **Question Set**, and **Year** (e.g. `Mathematics - 121-327 - Set-A - 2026.pdf`).
 
-3. **🗓️ Structured Year Announcement Headers**:
+4. **🗓️ Structured Year Announcement Headers**:
    - Before uploading question papers for any exam year, an introductory index message is posted in the channel detailing the examination year, total papers, and key subjects.
    - Serves as a searchable separator in the Telegram channel feed.
 
-4. **🗃️ SQLite Database (liteSQL)**:
-   - Tracks all 205 question papers across 11 examination years (2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023, 2024, 2025, 2026).
+5. **🗃️ SQLite Database (liteSQL with WAL mode)**:
+   - Tracks all 205 question papers across 11 examination years (2015–2026).
+   - High-concurrency Write-Ahead Logging (WAL) allows the UI and background worker to interact simultaneously with zero database locking conflicts.
    - Records status (`pending`, `uploading`, `sent`, `failed`), Telegram `message_id`, direct PDF CDN URL, file size, and timestamps.
-   - Prevents duplicate uploads and allows resuming interrupted runs seamlessly.
 
-5. **🛡️ Telegram Rate-Limit & Error Handling**:
+6. **🛡️ Telegram Rate-Limit & Error Handling**:
    - Built-in safe dispatch delay (default 2.5s).
    - Automatically catches HTTP 429 `Retry-After` headers and safely pauses until Telegram lifts the rate limit.
    - Automatic retry mechanism for transient network dropouts.
-
-6. **☁️ Streamlit Community Cloud Ready**:
-   - Built-in interactive Web UI for monitoring real-time dispatch progress, searching papers, filtering by year/status, and manual triggering.
-   - Free, 24/7 cloud hosting with high-bandwidth gigabit datacenter uplinks.
 
 ---
 
 ## 📱 Telegram Channel Setup
 
 - **Target Channel:** [@bsebclass12thpyq](https://t.me/bsebclass12thpyq) (or your own channel)
-- **Bot Setup:** Create a bot with [@BotFather](https://t.me/BotFather), add it as an Administrator to your channel with Post Messages permission.
+- **Bot Setup:** Add your bot as Administrator to your channel with Post Messages permission.
 
 ---
 
-## 🚀 Deployment on Streamlit Community Cloud (Recommended)
+## 🚀 Option 1: Streamlit Community Cloud (Persistent Background Thread)
 
-1. **Fork or connect this repository:**
-   - Repo: `https://github.com/mha93587-beep/bseb-class12th-pyq-telegram-bot`
-2. **Log into Streamlit Cloud:**
-   - Visit [share.streamlit.io](https://share.streamlit.io/) with your GitHub account.
-3. **Deploy the App:**
-   - Click **"New app"**
+1. **Log into Streamlit Cloud:** [share.streamlit.io](https://share.streamlit.io/) with your GitHub account.
+2. **Create New App:**
    - Repository: `mha93587-beep/bseb-class12th-pyq-telegram-bot`
    - Branch: `main`
    - Main file path: `app.py`
-4. **Configure Secrets**:
-   - In App Settings ➔ **Secrets**, add:
+3. **Configure Secrets**:
+   - In App Settings ➔ **Secrets**:
      ```toml
      TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
      TELEGRAM_CHAT_ID = "-1003918378426"
      ```
-5. Click **Deploy!** Once the app loads, simply press **⚡ Start Sending to Telegram**.
+4. Click **Deploy!**
+5. Once loaded, click **"⚡ Start Background Dispatch"**.
+   > **Note:** You can close your browser tab or lock your phone immediately! The server daemon thread will continue dispatching until all papers are sent.
+
+---
+
+## ⚡ Option 2: GitHub Actions (1-Click Headless Cloud Dispatcher)
+
+1. Go to your GitHub repository:
+   `https://github.com/mha93587-beep/bseb-class12th-pyq-telegram-bot`
+2. Add your Bot Token to GitHub Secrets:
+   - Go to **Settings** ➔ **Secrets and variables** ➔ **Actions** ➔ **New repository secret**
+   - Name: `TELEGRAM_BOT_TOKEN`
+   - Value: `YOUR_BOT_TOKEN`
+3. Go to the **"Actions"** tab.
+4. Select **"Dispatch BSEB Class 12th PYQs to Telegram"** in the left sidebar.
+5. Click **"Run workflow"**.
+   > GitHub's cloud runners will execute the entire dispatch pipeline in the background.
 
 ---
 
 ## 💻 Local CLI Usage
-
-You can also run commands directly via command line:
 
 ```bash
 # 1. Install dependencies
@@ -74,22 +85,10 @@ pip install -r requirements.txt
 # 2. View database statistics
 python3 main.py status
 
-# 3. Index/Re-crawl papers from Selfstudys
-python3 main.py index
-
-# 4. Pre-resolve direct PDF CDN links
-python3 main.py resolve
-
-# 5. Dispatch papers to Telegram
+# 3. Dispatch papers to Telegram
 export TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"
 export TELEGRAM_CHAT_ID="-1003918378426"
 python3 main.py dispatch --order ASC --delay 2.5
-
-# Dispatch a specific year only
-python3 main.py dispatch --year 2026
-
-# 6. Run Streamlit web UI locally
-streamlit run app.py
 ```
 
 ---
@@ -98,10 +97,12 @@ streamlit run app.py
 
 ```
 bseb-class12th-pyq-telegram-bot/
-├── app.py                  # Streamlit Community Cloud Web Dashboard
-├── crawler.py              # Selfstudys scraper, pagination & PDF resolver
-├── database.py             # SQLite database layer (schema, queries, stats)
-├── telegram_dispatcher.py  # Zero-disk in-memory PDF streaming & rate limit handler
+├── .github/workflows/
+│   └── dispatch.yml        # 1-Click GitHub Actions Background Runner
+├── app.py                  # Streamlit Dashboard with Persistent Background Worker
+├── crawler.py              # Selfstudys scraper & PDF resolver
+├── database.py             # SQLite WAL-mode concurrency layer
+├── telegram_dispatcher.py  # Background daemon dispatcher & in-memory PDF streamer
 ├── main.py                 # CLI interface
 ├── requirements.txt        # Python dependencies
 ├── bseb_pyq.db             # Pre-indexed SQLite database

@@ -6,13 +6,17 @@ from typing import List, Dict, Optional, Any
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bseb_pyq.db")
 
 def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db(db_path: str = DEFAULT_DB_PATH):
     conn = get_connection(db_path)
     cur = conn.cursor()
+    # Enable WAL mode for high concurrency between background worker and UI
+    cur.execute("PRAGMA journal_mode=WAL;")
+    cur.execute("PRAGMA busy_timeout=30000;")
+    
     cur.execute("""
         CREATE TABLE IF NOT EXISTS years (
             year TEXT PRIMARY KEY,

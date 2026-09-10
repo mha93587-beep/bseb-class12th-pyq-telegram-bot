@@ -18,6 +18,13 @@ st.set_page_config(
 # Initialize Database
 database.init_db()
 
+# Singleton background worker instance across sessions
+@st.cache_resource
+def get_dispatcher_manager():
+    return telegram_dispatcher.BackgroundDispatcherManager()
+
+manager = get_dispatcher_manager()
+
 # Custom CSS styling
 st.markdown("""
 <style>
@@ -32,18 +39,28 @@ st.markdown("""
         border-radius: 6px;
         font-weight: 600;
     }
+    .status-box {
+        padding: 12px 18px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        font-size: 15px;
+    }
+    .status-running {
+        background-color: #E8F5E9;
+        border: 1px solid #4CAF50;
+        color: #1B5E20;
+    }
+    .status-idle {
+        background-color: #ECEFF1;
+        border: 1px solid #90A4AE;
+        color: #37474F;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Session state initialization
-if 'is_running' not in st.session_state:
-    st.session_state.is_running = False
-if 'stop_requested' not in st.session_state:
-    st.session_state.stop_requested = False
-
 # Sidebar Configuration
 st.sidebar.title("📚 BSEB 12th PYQ Bot")
-st.sidebar.caption("Automated Selfstudys.com to Telegram Cloud Dispatcher")
+st.sidebar.caption("True Persistent Background Cloud Dispatcher")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 Telegram Credentials")
@@ -95,19 +112,38 @@ selected_year_filter = st.sidebar.selectbox("Target Year Batch", options=["ALL Y
 target_year = None if selected_year_filter == "ALL YEARS" else selected_year_filter
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Tip**: Running on Streamlit Community Cloud streams directly from CDN with high-speed uplinks.")
+st.sidebar.success("🚀 **Persistent Background Mode**: Runs in a detached server thread. Closing your browser will **NOT** interrupt the dispatch!")
 
 # Header
 st.title("📚 Bihar Board (BSEB) Class 12th PYQ Dispatcher")
 st.markdown("Automated crawler & direct cloud streaming pipeline for Class 12th Previous Year Question Papers (2015–2026).")
 
-# Fetch Stats
+# Fetch Worker State
+worker_info = manager.get_info()
+is_worker_running = worker_info["is_running"]
+
+# Fetch Stats from Database
 stats = database.get_stats()
 total_p = stats['total_papers']
 sent_p = stats['sent_papers']
 pending_p = stats['pending_papers']
 failed_p = stats['failed_papers']
 pct_done = (sent_p / total_p * 100) if total_p > 0 else 0.0
+
+# Worker Status Banner
+if is_worker_running:
+    st.markdown(f"""
+    <div class="status-box status-running">
+        🟢 <b>Background Worker Active</b> — {worker_info['status_message']}<br>
+        <small><i>You can safely close this browser or lock your device. The upload continues uninterrupted in the cloud!</i></small>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown(f"""
+    <div class="status-box status-idle">
+        ⚪ <b>Worker Status:</b> {worker_info['status_message']}
+    </div>
+    """, unsafe_allow_html=True)
 
 # Metrics
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -123,7 +159,7 @@ st.markdown("---")
 tab1, tab2, tab3, tab4 = st.tabs([
     "🚀 Dispatcher & Monitor", 
     "📑 Question Papers Database", 
-    "☁️ Streamlit Cloud Hosting Guide", 
+    "☁️ Streamlit Cloud & Background Guide", 
     "🛠️ System Logs & Maintenance"
 ])
 
@@ -133,35 +169,34 @@ with tab1:
     btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
     
     with btn_col1:
-        start_btn = st.button("⚡ Start Sending to Telegram", type="primary", use_container_width=True, disabled=st.session_state.is_running)
+        start_btn = st.button("⚡ Start Background Dispatch", type="primary", use_container_width=True, disabled=is_worker_running)
     with btn_col2:
-        stop_btn = st.button("⏹️ Stop / Pause", use_container_width=True, disabled=not st.session_state.is_running)
+        stop_btn = st.button("⏹️ Stop / Pause", use_container_width=True, disabled=not is_worker_running)
     with btn_col3:
-        scan_btn = st.button("🔍 Scan & Re-Index Selfstudys", use_container_width=True, disabled=st.session_state.is_running)
+        scan_btn = st.button("🔍 Scan & Re-Index Selfstudys", use_container_width=True, disabled=is_worker_running)
     with btn_col4:
-        retry_btn = st.button("🔄 Retry Failed Papers", use_container_width=True, disabled=st.session_state.is_running)
+        retry_btn = st.button("🔄 Retry Failed Papers", use_container_width=True, disabled=is_worker_running)
         
     if stop_btn:
-        st.session_state.stop_requested = True
-        st.warning("Halting dispatcher after current file...")
+        manager.stop()
+        st.warning("Stop signal sent! Background worker is halting...")
+        time.sleep(1)
+        st.rerun()
 
     if retry_btn:
         database.reset_failed()
         st.success("All failed papers reset to 'pending' status.")
+        time.sleep(1)
         st.rerun()
 
     if scan_btn:
-        st.session_state.is_running = True
         prog_bar = st.progress(0.0)
         status_text = st.empty()
-        
         def index_cb(msg, pct):
             prog_bar.progress(pct)
             status_text.info(f"🔍 {msg}")
-            
         res = crawler.index_all(progress_callback=index_cb)
         status_text.success(f"✅ Scanning complete! Indexed {res['total_papers']} papers across {res['total_years']} years.")
-        st.session_state.is_running = False
         time.sleep(1)
         st.rerun()
 
@@ -169,45 +204,24 @@ with tab1:
         if not bot_token or not chat_id:
             st.error("Please enter your Telegram Bot Token and Channel Chat ID in the sidebar.")
         else:
-            st.session_state.is_running = True
-            st.session_state.stop_requested = False
-            
-            prog_container = st.container()
-            with prog_container:
-                prog_bar = st.progress(0.0)
-                status_text = st.empty()
-                live_info = st.empty()
-                
-            def is_cancelled_check():
-                return st.session_state.stop_requested
-
-            def progress_cb(paper, curr, total):
-                overall_stats = database.get_stats()
-                curr_sent = overall_stats['sent_papers']
-                total_all = overall_stats['total_papers']
-                pct = (curr_sent / total_all) if total_all > 0 else 0.0
-                prog_bar.progress(min(pct, 1.0))
-                status_text.markdown(f"**Dispatching ({curr}/{total} in current year)**: `{paper['clean_filename']}`")
-                live_info.caption(f"Overall Progress: {curr_sent}/{total_all} papers sent ({pct*100:.1f}%)")
-
-            status_text.info("🚀 Starting dispatch pipeline...")
-            batch_res = telegram_dispatcher.dispatch_batch(
+            success, msg = manager.start(
                 bot_token=bot_token,
                 chat_id=chat_id,
                 year=target_year,
                 order=order_key,
-                delay=delay_sec,
-                progress_callback=progress_cb,
-                is_cancelled=is_cancelled_check
+                delay=delay_sec
             )
-            
-            st.session_state.is_running = False
-            if st.session_state.stop_requested:
-                st.warning("Dispatcher paused by user.")
+            if success:
+                st.success(f"🚀 {msg}")
+                time.sleep(1)
+                st.rerun()
             else:
-                st.success(f"🎉 Dispatch completed! Sent: {batch_res['sent']}, Failed: {batch_res['failed']}")
-            time.sleep(1.5)
-            st.rerun()
+                st.warning(msg)
+
+    # Live Progress Display
+    prog_pct = min(max(pct_done / 100.0, 0.0), 1.0)
+    st.progress(prog_pct)
+    st.caption(f"Overall Channel Progress: {sent_p} of {total_p} papers sent ({pct_done:.1f}%)")
 
     st.markdown("### 📊 Year-by-Year Breakdown")
     if stats['year_stats']:
@@ -223,6 +237,11 @@ with tab1:
         st.dataframe(y_df, use_container_width=True, hide_index=True)
     else:
         st.info("No papers indexed yet. Click 'Scan & Re-Index Selfstudys' above.")
+
+    # Auto-refresh UI when worker is actively running
+    if is_worker_running:
+        time.sleep(2.0)
+        st.rerun()
 
 # ================= TAB 2: PAPERS DATABASE =================
 with tab2:
@@ -284,34 +303,27 @@ with tab2:
 
 # ================= TAB 3: STREAMLIT CLOUD GUIDE =================
 with tab3:
-    st.subheader("☁️ Deploying to Streamlit Community Cloud")
+    st.subheader("☁️ Running in True Background Mode")
     st.markdown("""
-    Host this entire automation pipeline on **Streamlit Community Cloud** (free forever) so it runs with **gigabit cloud bandwidth** directly streaming PDFs from Selfstudys CDN to Telegram!
+    ### ❓ Kyu ruk gaya tha browser close karne par?
+    Streamlit me default button clicks browser ke **WebSocket connection** se jude hote hain. Agar browser tab close ho ya phone screen lock ho jaye, to WebSocket band ho jata hai aur Streamlit us session ko terminate kar deta hai.
     
-    ### 📋 Step-by-Step Deployment:
-    1. **GitHub Repository**:
-       This repository is hosted at:
-       `https://github.com/mha93587-beep/bseb-class12th-pyq-telegram-bot`
-       
-    2. **Log in to Streamlit Cloud**:
-       Go to [share.streamlit.io](https://share.streamlit.io/) and sign in with GitHub.
-       
-    3. **Create New App**:
-       - Click **"New app"**
-       - Select Repository: `mha93587-beep/bseb-class12th-pyq-telegram-bot`
-       - Branch: `main`
-       - Main file path: `app.py`
-       
-    4. **Configure Secrets (Recommended)**:
-       Under **Advanced settings** ➔ **Secrets**, paste your credentials:
-       ```toml
-       TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-       TELEGRAM_CHAT_ID = "-1003918378426"
-       ```
-       
-    5. **Deploy**:
-       Click **"Deploy!"**.
-       Once deployed, you can click **"Start Sending to Telegram"** anytime and it will dispatch all 205 papers continuously in the background!
+    ### ✅ Naya Solution (Persistent Daemon Thread Worker):
+    Ab humne `BackgroundDispatcherManager` implement kiya hai jo **server ke detached daemon thread** me chalta hai:
+    1. Jaise hi aap **"⚡ Start Background Dispatch"** dabayenge, task server ke background thread me assign ho jata hai.
+    2. Ab aap **apna browser tab close kar sakte hain, screen lock kar sakte hain, ya phone band kar sakte hain**!
+    3. Worker server par chalta rahega aur har 2.5 second me PDF stream Telegram channel me bhejta rahega.
+    4. Jab bhi aap browser dobara open karenge, aapko live updated progress dikhegi!
+    
+    ---
+    
+    ### ⚡ Option 2: GitHub Actions Se Background Run Karein (100% Reliable Cloud Server)
+    Aap is repository ke **GitHub Actions** se bhi 1-click me background dispatch chala sakte hain:
+    1. Apne GitHub repo me jayein: `https://github.com/mha93587-beep/bseb-class12th-pyq-telegram-bot`
+    2. **"Actions"** tab par click karein.
+    3. Left sidebar me **"Dispatch BSEB Class 12th PYQs"** workflow select karein.
+    4. **"Run workflow"** button par click karein!
+    5. GitHub ka apna cloud server background me pura batch 10-15 minute me bhej dega — browser khula rakhne ki bilkul zaroorat nahi hai!
     """)
 
 # ================= TAB 4: SYSTEM LOGS =================
